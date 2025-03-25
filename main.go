@@ -41,7 +41,7 @@ func main() {
 		if pod.Spec.Affinity != nil && pod.Spec.Affinity.NodeAffinity != nil {
 			for _, term := range pod.Spec.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution {
 				for _, expr := range term.Preference.MatchExpressions {
-					if expr.Key == "is_spot" && slices.Contains(expr.Values, "true") {
+					if expr.Key == "cloud.google.com/gke-spot" && slices.Contains(expr.Values, "true") {
 						fmt.Printf("Pod %s has node affinity to spot instances\n", pod.GetName())
 						pods_custom[pod.GetName()] = map[string]string{"HostIP": pod.Status.HostIP, "NodeName": pod.Spec.NodeName, "CreationTimestamp": pod.GetCreationTimestamp().String(), "Namespace": pod.GetNamespace()}
 					}
@@ -52,7 +52,7 @@ func main() {
 
 	nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
 	for _, node := range nodes.Items {
-		if node.GetLabels()["is_spot"] == "true" {
+		if node.GetLabels()["cloud.google.com/gke-spot"] == "true" {
 			map_of_spot_instances[node.GetName()] = map[string]string{"HostIP": node.Status.Addresses[0].Address}
 		}
 	}
