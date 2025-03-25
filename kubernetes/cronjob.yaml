@@ -16,7 +16,7 @@ spec:
         spec:
           containers:
             - image: docker.io/shkatara/kubernetes-descheduler:v1.0.0
-              imagePullPolicy: IfNotPresent
+              imagePullPolicy: Always
               name: descheduler
               resources: {}
               terminationMessagePath: /dev/termination-log
