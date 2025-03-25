@@ -2,14 +2,13 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"slices"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/rest"
 )
 
 type PodName = string
@@ -34,13 +33,11 @@ type SpotInstance struct {
 func main() {
 	start := time.Now()
 
-	kubeconfig := flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
-	flag.Parse()
-	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
+	config, err := rest.InClusterConfig()
 	if err != nil {
 		panic(err.Error())
 	}
-
+	// creates the clientset
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		panic(err.Error())
@@ -88,7 +85,7 @@ func main() {
 	}
 
 	for k, podinfo := range pods_with_affinity {
-		if podinfo.CreationTimestamp.Before(time.Now().Add(10 * time.Minute)) {
+		if podinfo.CreationTimestamp.Before(time.Now().Add(10 * time.Minute)) { // only select pods whose creation time is older than 10 minutes from the current time
 			if !slices.Contains(list_of_spot_ips, podinfo.HostIP) {
 				err = clientset.CoreV1().Pods(podinfo.Namespace).Delete(context.TODO(), k, metav1.DeleteOptions{})
 				if err != nil {
@@ -100,5 +97,4 @@ func main() {
 
 	finish := time.Now()
 	fmt.Printf("Execution time: %v\n", finish.Sub(start))
-
 }
