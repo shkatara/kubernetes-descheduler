@@ -72,7 +72,6 @@ func main() {
 	}
 
 	for k, podinfo := range pods_with_affinity {
-		// check if pod is actually Ready
 		if !slices.Contains(list_of_spot_ips, podinfo["HostIP"]) {
 			err = clientset.CoreV1().Pods(podinfo["Namespace"]).Delete(context.TODO(), k, metav1.DeleteOptions{})
 			if err != nil {
@@ -80,5 +79,4 @@ func main() {
 			}
 		}
 	}
-
 }
