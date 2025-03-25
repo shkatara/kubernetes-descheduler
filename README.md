@@ -2,7 +2,7 @@
 
 ## Reason for this descheduler - Cost Saving in GKE
 
-When using a GKE cluster with spot instances, we usually use node affinities for workloads that are tolerant to failure and put them on spot instances, for cost reduction. 
+When using a GKE cluster with spot instances to save on cost, we usually use node affinities for workloads that are tolerant to failure and put them on spot instances, for cost reduction. 
 
 The node affinity looks something like this:
 
