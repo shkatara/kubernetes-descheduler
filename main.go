@@ -28,6 +28,9 @@ func main() {
 	}
 
 	pods, err := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		panic(err.Error())
+	}
 	// find pods that have a node with affinity to spot instances
 	for _, pod := range pods.Items {
 		if pod.Spec.Affinity != nil && pod.Spec.Affinity.NodeAffinity != nil {
@@ -43,6 +46,9 @@ func main() {
 	}
 
 	nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		panic(err.Error())
+	}
 	for _, node := range nodes.Items {
 		if node.GetLabels()["cloud.google.com/gke-spot"] == "true" {
 			map_of_spot_instances[node.GetName()] = map[string]string{"HostIP": node.Status.Addresses[0].Address}
