@@ -2,26 +2,30 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"slices"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 var (
-	pods_custom           = make(map[string]map[string]string)
+	pods_with_affinity    = make(map[string]map[string]string)
 	map_of_spot_instances = make(map[string]map[string]string)
 	list_of_spot_ips      = make([]string, 0)
 )
 
 func main() {
-	config, err := rest.InClusterConfig()
+
+	kubeconfig := flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
+	flag.Parse()
+	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
 	if err != nil {
 		panic(err.Error())
 	}
-	// creates the clientset
+
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		panic(err.Error())
@@ -38,7 +42,14 @@ func main() {
 				for _, expr := range term.Preference.MatchExpressions {
 					if expr.Key == "cloud.google.com/gke-spot" && slices.Contains(expr.Values, "true") {
 						fmt.Printf("Pod %s has node affinity to spot instances\n", pod.GetName())
-						pods_custom[pod.GetName()] = map[string]string{"HostIP": pod.Status.HostIP, "NodeName": pod.Spec.NodeName, "CreationTimestamp": pod.GetCreationTimestamp().String(), "Namespace": pod.GetNamespace()}
+						// check if pod is actually Ready by looping over status.conditions
+						for _, condition := range pod.Status.Conditions {
+							if condition.Type == "Ready" {
+								if condition.Status == "True" {
+									pods_with_affinity[pod.GetName()] = map[string]string{"HostIP": pod.Status.HostIP, "NodeName": pod.Spec.NodeName, "CreationTimestamp": pod.GetCreationTimestamp().String(), "Namespace": pod.GetNamespace()}
+								}
+							}
+						}
 					}
 				}
 			}
@@ -60,7 +71,8 @@ func main() {
 		list_of_spot_ips = append(list_of_spot_ips, v["HostIP"])
 	}
 
-	for k, podinfo := range pods_custom {
+	for k, podinfo := range pods_with_affinity {
+		// check if pod is actually Ready
 		if !slices.Contains(list_of_spot_ips, podinfo["HostIP"]) {
 			err = clientset.CoreV1().Pods(podinfo["Namespace"]).Delete(context.TODO(), k, metav1.DeleteOptions{})
 			if err != nil {
@@ -68,4 +80,5 @@ func main() {
 			}
 		}
 	}
+
 }
