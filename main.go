@@ -2,13 +2,12 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"slices"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/rest"
 )
 
 var (
@@ -18,18 +17,11 @@ var (
 )
 
 func main() {
-	var kubeconfig *string
-
-	kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
-	flag.Parse()
-	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
+	config, err := rest.InClusterConfig()
 	if err != nil {
 		panic(err.Error())
 	}
-	if err != nil {
-		panic(err.Error())
-	}
-
+	// creates the clientset
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		panic(err.Error())
