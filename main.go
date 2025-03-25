@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"slices"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -18,6 +19,7 @@ var (
 )
 
 func main() {
+	start := time.Now()
 
 	kubeconfig := flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
 	flag.Parse()
@@ -79,4 +81,8 @@ func main() {
 			}
 		}
 	}
+
+	finish := time.Now()
+	fmt.Printf("Execution time: %v\n", finish.Sub(start))
+
 }
