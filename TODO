@@ -1,0 +1,1 @@
+Cross reference the time if the creation timestamp is older than 6 hours AND if the pod status is READY. Only such pods should be taken into account
