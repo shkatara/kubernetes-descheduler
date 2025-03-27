@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"golang.org/x/exp/slices"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -26,22 +27,42 @@ func main() {
 
 	clientset, err := createKubernetesClient()
 	if err != nil {
-		panic(fmt.Errorf("failed to create Kubernetes client: %w", err))
+		fmt.Println(err)
+		return
 	}
 
-	podsWithAffinity, err := findPodsWithAffinity(clientset)
+	pods, err := podGetter(clientset)
 	if err != nil {
-		panic(fmt.Errorf("failed to find pods with affinity: %w", err))
+		fmt.Println(err)
+		return
 	}
 
-	spotIPs, err := getSpotInstanceIPs(clientset)
-	if err != nil {
-		panic(fmt.Errorf("failed to get spot instance IPs: %w", err))
+	podsWithAffinity := filterPodsWithAffinity(pods)
+	if len(podsWithAffinity) == 0 {
+		fmt.Print("No pods with affinity.")
+		return
 	}
 
-	err = deleteNonSpotPods(clientset, podsWithAffinity, spotIPs)
+	nodes, err := NodeGetter(clientset)
 	if err != nil {
-		panic(fmt.Errorf("failed to delete non-spot pods: %w", err))
+		fmt.Println(err)
+		return
+	}
+
+	spotIPs := getSpotInstanceIPs(nodes)
+	if len(spotIPs) == 0 {
+		fmt.Print("No spot instances.")
+		return
+	}
+
+	podsDeleted, err := deleteNonSpotPods(clientset, podsWithAffinity, spotIPs)
+	if err != nil {
+		fmt.Errorf("failed to delete non-spot pods: %w", err)
+		return
+	}
+
+	for _, podName := range podsDeleted {
+		fmt.Println(podName, " - deleted")
 	}
 
 	fmt.Printf("Execution time: %v\n", time.Since(start))
@@ -55,13 +76,17 @@ func createKubernetesClient() (*kubernetes.Clientset, error) {
 	return kubernetes.NewForConfig(config)
 }
 
-func findPodsWithAffinity(clientset *kubernetes.Clientset) (map[string]PodWithAffinity, error) {
-	podsWithAffinity := make(map[string]PodWithAffinity)
+func podGetter(clientset *kubernetes.Clientset) (*v1.PodList, error) {
+	return clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{})
+}
 
-	pods, err := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
+func NodeGetter(clientset *kubernetes.Clientset) (*v1.NodeList, error) {
+	return clientset.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
+}
+
+func filterPodsWithAffinity(pods *v1.PodList) map[string]PodWithAffinity {
+
+	podsWithAffinity := make(map[string]PodWithAffinity)
 
 	for _, pod := range pods.Items {
 		if pod.Spec.Affinity == nil || pod.Spec.Affinity.NodeAffinity == nil {
@@ -82,11 +107,10 @@ func findPodsWithAffinity(clientset *kubernetes.Clientset) (map[string]PodWithAf
 			}
 		}
 	}
-
-	return podsWithAffinity, nil
+	return podsWithAffinity
 }
 
-func isPodReady(pod metav1.Pod) bool {
+func isPodReady(pod v1.Pod) bool {
 	for _, condition := range pod.Status.Conditions {
 		if condition.Type == "Ready" && condition.Status == "True" {
 			return true
@@ -95,13 +119,8 @@ func isPodReady(pod metav1.Pod) bool {
 	return false
 }
 
-func getSpotInstanceIPs(clientset *kubernetes.Clientset) ([]string, error) {
+func getSpotInstanceIPs(nodes *v1.NodeList) []string {
 	spotIPs := []string{}
-
-	nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
 
 	for _, node := range nodes.Items {
 		if node.GetLabels()["cloud.google.com/gke-spot"] == "true" {
@@ -110,19 +129,20 @@ func getSpotInstanceIPs(clientset *kubernetes.Clientset) ([]string, error) {
 			}
 		}
 	}
-
-	return spotIPs, nil
+	return spotIPs
 }
 
-func deleteNonSpotPods(clientset *kubernetes.Clientset, podsWithAffinity map[string]PodWithAffinity, spotIPs []string) error {
+func deleteNonSpotPods(clientset *kubernetes.Clientset, podsWithAffinity map[string]PodWithAffinity, spotIPs []string) ([]string, error) {
+	podsDeleted := []string{}
 	for podName, podInfo := range podsWithAffinity {
 		if podInfo.CreationTimestamp.Before(time.Now().Add(-10*time.Minute)) && !slices.Contains(spotIPs, podInfo.HostIP) {
 			err := clientset.CoreV1().Pods(podInfo.Namespace).Delete(context.TODO(), podName, metav1.DeleteOptions{})
 			if err != nil {
-				return fmt.Errorf("failed to delete pod %s: %w", podName, err)
+				return podsDeleted, fmt.Errorf("failed to delete pod %s: %w", podName, err)
 			}
+			podsDeleted = append(podsDeleted, podName)
 			fmt.Printf("Deleted pod %s in namespace %s\n", podName, podInfo.Namespace)
 		}
 	}
-	return nil
+	return podsDeleted, nil
 }
