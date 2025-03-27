@@ -3,21 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"slices"
 	"time"
 
+	"golang.org/x/exp/slices"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-)
-
-type PodName = string
-type NodeName = string
-
-var (
-	pods_with_affinity    = make(map[PodName]PodWithAffinity)
-	map_of_spot_instances = make(map[NodeName]SpotInstance)
-	list_of_spot_ips      = make([]string, 0)
 )
 
 type PodWithAffinity struct {
@@ -33,35 +24,58 @@ type SpotInstance struct {
 func main() {
 	start := time.Now()
 
+	clientset, err := createKubernetesClient()
+	if err != nil {
+		panic(fmt.Errorf("failed to create Kubernetes client: %w", err))
+	}
+
+	podsWithAffinity, err := findPodsWithAffinity(clientset)
+	if err != nil {
+		panic(fmt.Errorf("failed to find pods with affinity: %w", err))
+	}
+
+	spotIPs, err := getSpotInstanceIPs(clientset)
+	if err != nil {
+		panic(fmt.Errorf("failed to get spot instance IPs: %w", err))
+	}
+
+	err = deleteNonSpotPods(clientset, podsWithAffinity, spotIPs)
+	if err != nil {
+		panic(fmt.Errorf("failed to delete non-spot pods: %w", err))
+	}
+
+	fmt.Printf("Execution time: %v\n", time.Since(start))
+}
+
+func createKubernetesClient() (*kubernetes.Clientset, error) {
 	config, err := rest.InClusterConfig()
 	if err != nil {
-		panic(err.Error())
+		return nil, err
 	}
-	// creates the clientset
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		panic(err.Error())
-	}
+	return kubernetes.NewForConfig(config)
+}
+
+func findPodsWithAffinity(clientset *kubernetes.Clientset) (map[string]PodWithAffinity, error) {
+	podsWithAffinity := make(map[string]PodWithAffinity)
 
 	pods, err := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
-		panic(err.Error())
+		return nil, err
 	}
-	// find pods that have a node with affinity to spot instances
-	for _, pod := range pods.Items {
 
-		if pod.Spec.Affinity != nil && pod.Spec.Affinity.NodeAffinity != nil {
-			for _, term := range pod.Spec.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution {
-				for _, expr := range term.Preference.MatchExpressions {
-					if expr.Key == "cloud.google.com/gke-spot" && slices.Contains(expr.Values, "true") {
-						fmt.Printf("Pod %s has node affinity to spot instances\n", pod.GetName())
-						// check if pod is actually Ready by looping over status.conditions
-						for _, condition := range pod.Status.Conditions {
-							if condition.Type == "Ready" {
-								if condition.Status == "True" {
-									pods_with_affinity[pod.GetName()] = PodWithAffinity{HostIP: pod.Status.HostIP, CreationTimestamp: pod.GetCreationTimestamp().Time, Namespace: pod.GetNamespace()}
-								}
-							}
+	for _, pod := range pods.Items {
+		if pod.Spec.Affinity == nil || pod.Spec.Affinity.NodeAffinity == nil {
+			continue
+		}
+
+		for _, term := range pod.Spec.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution {
+			for _, expr := range term.Preference.MatchExpressions {
+				if expr.Key == "cloud.google.com/gke-spot" && slices.Contains(expr.Values, "true") {
+					if isPodReady(pod) {
+						podsWithAffinity[pod.GetName()] = PodWithAffinity{
+							HostIP:            pod.Status.HostIP,
+							CreationTimestamp: pod.GetCreationTimestamp().Time,
+							Namespace:         pod.GetNamespace(),
 						}
 					}
 				}
@@ -69,32 +83,46 @@ func main() {
 		}
 	}
 
-	nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
-	if err != nil {
-		panic(err.Error())
-	}
-	for _, node := range nodes.Items {
-		if node.GetLabels()["cloud.google.com/gke-spot"] == "true" {
-			map_of_spot_instances[node.GetName()] = SpotInstance{HostIP: node.Status.Addresses[0].Address}
+	return podsWithAffinity, nil
+}
+
+func isPodReady(pod metav1.Pod) bool {
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == "Ready" && condition.Status == "True" {
+			return true
 		}
 	}
+	return false
+}
 
-	// convert map_of_spot_instances to slice
-	for _, v := range map_of_spot_instances {
-		list_of_spot_ips = append(list_of_spot_ips, v.HostIP)
+func getSpotInstanceIPs(clientset *kubernetes.Clientset) ([]string, error) {
+	spotIPs := []string{}
+
+	nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return nil, err
 	}
 
-	for k, podinfo := range pods_with_affinity {
-		if podinfo.CreationTimestamp.Before(time.Now().Add(10 * time.Minute)) { // only select pods whose creation time is older than 10 minutes from the current time
-			if !slices.Contains(list_of_spot_ips, podinfo.HostIP) {
-				err = clientset.CoreV1().Pods(podinfo.Namespace).Delete(context.TODO(), k, metav1.DeleteOptions{})
-				if err != nil {
-					panic(err.Error())
-				}
+	for _, node := range nodes.Items {
+		if node.GetLabels()["cloud.google.com/gke-spot"] == "true" {
+			if len(node.Status.Addresses) > 0 {
+				spotIPs = append(spotIPs, node.Status.Addresses[0].Address)
 			}
 		}
 	}
 
-	finish := time.Now()
-	fmt.Printf("Execution time: %v\n", finish.Sub(start))
+	return spotIPs, nil
+}
+
+func deleteNonSpotPods(clientset *kubernetes.Clientset, podsWithAffinity map[string]PodWithAffinity, spotIPs []string) error {
+	for podName, podInfo := range podsWithAffinity {
+		if podInfo.CreationTimestamp.Before(time.Now().Add(-10*time.Minute)) && !slices.Contains(spotIPs, podInfo.HostIP) {
+			err := clientset.CoreV1().Pods(podInfo.Namespace).Delete(context.TODO(), podName, metav1.DeleteOptions{})
+			if err != nil {
+				return fmt.Errorf("failed to delete pod %s: %w", podName, err)
+			}
+			fmt.Printf("Deleted pod %s in namespace %s\n", podName, podInfo.Namespace)
+		}
+	}
+	return nil
 }
