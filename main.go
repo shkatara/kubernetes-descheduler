@@ -24,11 +24,9 @@ type SpotInstance struct {
 
 func main() {
 	start := time.Now()
-
 	clientset, err := createKubernetesClient()
 	if err != nil {
-		fmt.Println(err)
-		return
+		panic(err.Error())
 	}
 
 	pods, err := podGetter(clientset)
@@ -51,18 +49,18 @@ func main() {
 
 	spotIPs := getSpotInstanceIPs(nodes)
 	if len(spotIPs) == 0 {
-		fmt.Print("No spot instances.")
+		fmt.Println("No spot instances are available. Exiting.")
 		return
 	}
 
 	podsDeleted, err := deleteNonSpotPods(clientset, podsWithAffinity, spotIPs)
 	if err != nil {
-		fmt.Errorf("failed to delete non-spot pods: %w", err)
+		fmt.Println("failed to delete non-spot pods: %w", err)
 		return
 	}
 
 	for _, podName := range podsDeleted {
-		fmt.Println(podName, " - deleted")
+		fmt.Println("Pod", podName, "scheduled on a spot node.")
 	}
 
 	fmt.Printf("Execution time: %v\n", time.Since(start))
@@ -135,13 +133,12 @@ func getSpotInstanceIPs(nodes *v1.NodeList) []string {
 func deleteNonSpotPods(clientset *kubernetes.Clientset, podsWithAffinity map[string]PodWithAffinity, spotIPs []string) ([]string, error) {
 	podsDeleted := []string{}
 	for podName, podInfo := range podsWithAffinity {
-		if podInfo.CreationTimestamp.Before(time.Now().Add(-10*time.Minute)) && !slices.Contains(spotIPs, podInfo.HostIP) {
+		if podInfo.CreationTimestamp.Before(time.Now().Add(10*time.Minute)) && !slices.Contains(spotIPs, podInfo.HostIP) {
 			err := clientset.CoreV1().Pods(podInfo.Namespace).Delete(context.TODO(), podName, metav1.DeleteOptions{})
 			if err != nil {
 				return podsDeleted, fmt.Errorf("failed to delete pod %s: %w", podName, err)
 			}
 			podsDeleted = append(podsDeleted, podName)
-			fmt.Printf("Deleted pod %s in namespace %s\n", podName, podInfo.Namespace)
 		}
 	}
 	return podsDeleted, nil
